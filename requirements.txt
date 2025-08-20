@@ -1,0 +1,41 @@
+# Edited PointAttn requirements
+h5py
+munch
+# yaml does not exist anymore
+tensorpack
+
+
+
+# Edited PoinTr requirements
+argparse
+easydict
+h5py
+matplotlib==3.09       # otherwise depricated functions not working anymore
+numpy
+open3d #==0.9 # if you're on newer versions of python / mamba / conda, installing may throw an error. installing latest open3d seems to work 
+opencv-python
+pyyaml
+scipy
+tensorboardx==2.6
+protobuf==3.19      # needed for tensorboardx 2.6.2
+
+timm #==0.4.5  # if you're on newer versions of python / mamba / conda, installing may throw an error. installing latest timm seems to work 
+tqdm
+transforms3d
+einops
+
+# own requirements
+tqdm
+
+# typing_extension==4.11.0    # needed for wandb 0.19.6
+pydantic==2.9   # needed for typing_extensions to be 4.11.0
+
+pyvista
+tensorboard
+
+
+wandb==0.19.6
+mmcv-full
+pyvistaqt
+PyQt5
+imageio

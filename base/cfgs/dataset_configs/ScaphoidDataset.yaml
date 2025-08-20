@@ -1,0 +1,4 @@
+NAME: ScaphoidDataset
+N_POINTS: 2048
+DATA_PATH : data/ScaphoidDataset/
+CARS: FALSE

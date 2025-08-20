@@ -1,0 +1,112 @@
+model_name: ScaphoidPointAttN
+
+dataset : {
+  train : { _base_: dataset_configs/ScaphoidDataset.yaml,
+            others: {subset: 'train'}},
+  val : { _base_: dataset_configs/ScaphoidDataset.yaml,
+            others: {subset: 'val'}},
+  test : { _base_: dataset_configs/ScaphoidDataset.yaml,
+            others: {subset: 'test'}},
+  transform_with: 'volar',
+  # transform_with: 'volar',
+  reverse_transforms: 'for training',    # 'for logging only'   # 'no'
+  transforms : [
+    'CoupledDemeaning', 
+    'CoupledRandomRotation',
+    'CoupledRescale', # maybe never rotate GT such that network learns to rotate volar side back and then maybe also dorsal side
+  ],
+  # transforms : [
+  #   'CoupledDemeaning', 
+  #   'CoupledRandomRotation',
+  #   'CoupledRescale', # maybe never rotate GT such that network learns to rotate volar side back and then maybe also dorsal side
+  # ]
+            }
+
+# first test: do concat of volar and dorsal to have a baseline only with coupled transforms and only use volar for seeds
+# second test: use two FEs and concat shape codes with only coupled transforms and only use volar for seeds
+# third test: use two FEs and concat shape codes with Encoupled transforms and only use volar for seeds <- make it gradually harder (offset -> rotation etc.)
+
+
+# concat volar+dorsal without any augmentation -> get shape code -> generate seeds using shape code and only volar points -> best possible outcome if volar and dorsal sides cannot be aligned
+# two FEs (volar and dorsal) -> two shape codes -> generate seeds using both shape codes
+
+# rotate volar side independent from gt and then reverse the rotation to get the gt using the saved transforms
+# make network use dorsal side by encoding rotation of gt in dorsal side
+# generate seeds using volar side. Register seeds to dorsal side using.
+model : {
+    NAME: ScaphoidPointAttN,
+    num_points: 8192, # ToDo: Bestimme num_points
+    arch: default_arch_volar,
+    available_building_blocks : {
+      # feature_extractor: concat, # separate, mix
+      
+      feature_extractor: {type: 'FE', keys: [in, out], mode: 'pointattn'},
+      feature_extractor_affil: {type: 'FE', keys: [in, out], mode: 'affil'},
+      feature_extractor_intermediate: {type: 'FE-', keys: [in, out], mode: 'FE-'}, # feature_extractor, but stops before compressing features into shape code
+      seed_attn_matcher: {type: 'SAM', keys: [in, seeds, out], mode: 'attn'}, # seed attention matcher that takes the features and the seeds and generates a shape code
+      seed_generator: {type: 'SG-', keys: [shape_code, out], mode: 'pointattn'}, # seed_generator that only takes the shape code and generates seeds
+      seed_generator_to_sparse: {type: 'SG', keys: [in, shape_code, out], mode: 'pointattn'},  # seed_generator that also adds the input points to the seeds and does fps to create sparse_pc
+      point_generator: {type: 'PG', keys: [seeds, shape_code, out], mode: 'pointattn'},
+
+      seeds_to_sparse_pc: {type: 'OP', keys: [in, out], mode: 'seeds_to_sparse_pc'},
+      concat_2: {type: 'OP', keys: [in, out], mode: 'concat-dim-2'},
+      concat_1: {type: 'OP', keys: [in, out], mode: 'concat-dim-1'},
+      affil_enricher: {type: 'OP', keys: [in, out], mode: 'affil'},
+      fps: {type: 'OP', keys: [in, out], mode: 'fps'},
+    },
+    available_archs: {
+      default_arch_volar: [feature_extractor: {in: volar, out: shape_code_v}, seed_generator_to_sparse: {in: volar, shape_code: shape_code_v, out: sparse_pc}, point_generator: {seeds: sparse_pc, shape_code: shape_code_v, out: points}],
+      default_arch_dorsal: [feature_extractor: {in: dorsal, out: shape_code_d}, seed_generator_to_sparse: {in: dorsal, shape_code: shape_code_d, out: sparse_pc}, point_generator: {seeds: sparse_pc, shape_code: shape_code_d, out: points}],
+      default_arch_max: [concat_2: {in: [volar, dorsal], out: concat}, feature_extractor: {in: concat, out: shape_code_v_d}, seed_generator_to_sparse: {in: concat, shape_code: shape_code_v_d, out: sparse_pc}, point_generator: {seeds: sparse_pc, shape_code: shape_code_v_d, out: points}],
+      
+      # seed generator adds either volar or dorsal input to the generated seeds. Or in the static case adds nothing at all
+      affiliation_arch_v: [affil_enricher: {in: [volar, dorsal], out: xyz_affil}, feature_extractor_affil: {in: xyz_affil, out: shape_code_affil}, seed_generator_to_sparse: {in: volar, shape_code: shape_code_affil, out: sparse_pc}, point_generator: {seeds: sparse_pc, shape_code: shape_code_affil, out: points}],
+      affiliation_arch_d: [affil_enricher: {in: [volar, dorsal], out: xyz_affil}, feature_extractor_affil: {in: xyz_affil, out: shape_code_affil}, seed_generator_to_sparse: {in: dorsal, shape_code: shape_code_affil, out: sparse_pc}, point_generator: {seeds: sparse_pc, shape_code: shape_code_affil, out: points}],
+      affiliation_arch_static: [affil_enricher: {in: [volar, dorsal], out: xyz_affil}, feature_extractor_affil: {in: xyz_affil, out: shape_code_affil}, seed_generator_to_sparse: {in: None, shape_code: shape_code_affil, out: sparse_pc}, point_generator: {seeds: sparse_pc, shape_code: shape_code_affil, out: points}],
+
+      concat_arch_v: [feature_extractor: {in: volar, out: shape_code_v}, feature_extractor: {in: dorsal, out: shape_code_d}, concat_1: {in: [shape_code_v, shape_code_d], out: shape_code_c}, seed_generator_to_sparse: {in: volar, shape_code: shape_code_c, out: sparse_pc}, point_generator: {seeds: sparse_pc, shape_code: shape_code_c, out: points}],
+      concat_arch_d: [feature_extractor: {in: volar, out: shape_code_v}, feature_extractor: {in: dorsal, out: shape_code_d}, concat_1: {in: [shape_code_v, shape_code_d], out: shape_code_c}, seed_generator_to_sparse: {in: dorsal, shape_code: shape_code_c, out: sparse_pc}, point_generator: {seeds: sparse_pc, shape_code: shape_code_c, out: points}],
+      
+      seed_refinement: [feature_extractor: {in: volar, out: shape_code_v}, seed_generator: {shape_code: shape_code_v, out: seeds_v}, feature_extractor_intermediate: {in: dorsal, out: features_d}, seed_attn_matcher: {in: features_d, seeds: seeds_v, out: shape_code_refined}, seed_generator_to_sparse: {in: volar, shape_code: shape_code_refined, out: sparse_pc}, point_generator: {seeds: sparse_pc, shape_code: shape_code_refined, out: points}],
+      seed_refinement_double: [feature_extractor: {in: volar, out: shape_code_v}, seed_generator: {shape_code: shape_code_v, out: seeds_v}, feature_extractor_intermediate: {in: dorsal, out: features_d}, feature_extractor_intermediate: {in: volar, out: features_v}, concat_2: {in: [features_d, features_v], out: features_concat}, seed_attn_matcher: {in: features_concat, seeds: seeds_v, out: shape_code_refined}, seed_generator_to_sparse: {in: volar, shape_code: shape_code_refined, out: sparse_pc}, point_generator: {seeds: sparse_pc, shape_code: shape_code_refined, out: points}],
+
+    # TODO: fix
+      # mix_arch: [feature_extractor_v, seed_generator_mix, point_generator_x],    # extrac features from volar side and match them on dorsal side in seed generation
+      # internal_reg_arch: [feature_extractor_c, seed_generator_x, point_generator_x],    # test if FE can do registration internally
+      # # double_fe_arch: [feature_extractors_seperate, seed_generator_x, point_generator_x],    # test if two FEs can be used to generate seeds
+      # intertwined_fe_arch: [feature_extractor_intertwined, seed_generator_v, point_generator_x],
+    }
+}
+optimizer : {
+  type: AdamW,
+  kwargs: {
+  lr : 0.0001,
+  weight_decay : 0.0005
+}}
+
+scheduler: {
+  type: LambdaLR,
+  kwargs: {
+  decay_step: 21,
+  lr_decay: 0.9,
+  lowest_decay: 0.02  # min lr = lowest_decay * lr
+}}
+
+bnmscheduler: {
+  type: Lambda,
+  kwargs: {
+  decay_step: 21,
+  bn_decay: 0.5,
+  bn_momentum: 0.9,
+  lowest_decay: 0.01
+}}
+
+# test
+save_vis: False
+
+
+total_bs: 32
+step_per_update : 1
+max_epoch : 100
+
+consider_metric: CDL1

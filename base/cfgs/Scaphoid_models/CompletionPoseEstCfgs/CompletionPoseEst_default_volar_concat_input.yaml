@@ -1,0 +1,263 @@
+model_name: CompletionPoseEstPointAttN
+
+dataset : {
+  train : { _base_: dataset_configs/ScaphoidDataset.yaml,
+            others: {subset: 'train'}},
+  val : { _base_: dataset_configs/ScaphoidDataset.yaml,
+            others: {subset: 'val'}},
+  test : { _base_: dataset_configs/ScaphoidDataset.yaml,
+            others: {subset: 'test'}},
+  transform_with: 'volar',
+  reverse_transforms: 'no',    # 'for training' # 'for logging only'   # 'no'
+  transforms: [
+    'DecoupledDemeaning', 
+    'DecoupledRandomRotation',
+    'CoupledRescale',
+  ],
+}
+
+model : {
+    NAME: CompletionPoseEstPointAttN,
+    num_points: 8192,
+    arch: volar_pose_est_comp_concat_shape__input,
+    available_building_blocks : {
+
+      feature_extractor: {type: 'FE', keys: [in, out], mode: 'pointattn'},
+      feature_extractor_affil: {type: 'FE', keys: [in, out], mode: 'affil'},
+      feature_extractor_intermediate: {type: 'FE', keys: [in, out], mode: 'FE-'}, # feature_extractor, but stops before compressing features into shape code
+      feature_extractor_tnet: {type: 'FE', keys: [in, out], mode: 'TNet'},
+
+      rot_extractor: {type: 'RE', keys: [in, out], mode: 'affine'}, # feature extractor that takes the input and generates a shape code
+      rot_generator: {type: 'RG', keys: [shape_code, out], mode: 'affine'}, # feature extractor that takes the input and generates a shape code
+
+      pose_extractor: {type: 'PE', keys: [in, out], mode: 'pose'}, # pose extractor that takes the input and extracts a pose code
+      pose_generator: {type: 'PoseG', keys: [pose_code, out], mode: 'pose'}, # pose generator that takes the pose code and generates a 6D pose
+
+      shape_code_fuser: {type: "SCF", keys: [in, out], mode: 'mlp'}, # shape code fuser that takes the features and generates a shape code
+
+      seed_attn_matcher: {type: 'SAM', keys: [in, seeds, out], mode: 'attn'}, # seed attention matcher that takes the features and the seeds and generates a shape code
+      
+      seed_generator: {type: 'SG', keys: [shape_code, out], mode: 'SG-'}, # seed_generator that only takes the shape code and generates seeds
+      seed_generator_to_sparse: {type: 'SG', keys: [in, shape_code, out], mode: 'pointattn'},  # seed_generator that also adds the input points to the seeds and does fps to create sparse_pc
+      
+      point_generator: {type: 'PG', keys: [seeds, shape_code, out], mode: 'pointattn'},
+      
+      t_net_input: {type: 'TNet', keys: [in, out, K], mode: 'input'},
+      t_net_features: {type: 'TNet', keys: [in, out, K], mode: 'features'},
+
+      
+      seeds_to_sparse_pc: {type: 'OP', keys: [in, out], mode: 'seeds_to_sparse_pc'},
+      concat_2: {type: 'OP', keys: [in, out], mode: 'concat-dim-2'},
+      concat_1: {type: 'OP', keys: [in, out], mode: 'concat-dim-1'},
+      affil_enricher: {type: 'OP', keys: [in, out], mode: 'affil'},
+
+      aligner_anchor: {type: 'ALIGNER', keys: [src_pose, tgt_pose, src, tgt, out], mode: 'aligner_anchor'}, # aligner that takes the input and generates a shape code
+      aligner_ssm: {type: 'ALIGNER', keys: [src_pose, tgt_pose, src, tgt, out], mode: 'aligner_SSM'}, # aligner that takes the input and generates a shape code
+
+      fps: {type: 'OP', keys: [in, out], mode: 'fps'},
+    },
+    available_archs: {
+      default_arch_volar: [feature_extractor: {in: volar, out: shape_code_v}, seed_generator_to_sparse: {in: volar, shape_code: shape_code_v, out: sparse_pc}, point_generator: {seeds: sparse_pc, shape_code: shape_code_v, out: points}],
+      default_arch_dorsal: [feature_extractor: {in: dorsal, out: shape_code_d}, seed_generator_to_sparse: {in: dorsal, shape_code: shape_code_d, out: sparse_pc}, point_generator: {seeds: sparse_pc, shape_code: shape_code_d, out: points}],
+      default_arch_max: [concat_2: {in: [volar, dorsal], out: concat}, feature_extractor: {in: concat, out: shape_code_v_d}, seed_generator_to_sparse: {in: concat, shape_code: shape_code_v_d, out: sparse_pc}, point_generator: {seeds: sparse_pc, shape_code: shape_code_v_d, out: points}],
+
+      concat_arch_volar: [feature_extractor: {in: volar, out: shape_code_v}, feature_extractor: {in: dorsal, out: shape_code_d}, concat_1: {in: [shape_code_v, shape_code_d], out: shape_code_c}, seed_generator_to_sparse: {in: volar, shape_code: shape_code_c, out: sparse_pc}, point_generator: {seeds: sparse_pc, shape_code: shape_code_c, out: points}],
+      concat_arch_dorsal: [feature_extractor: {in: volar, out: shape_code_v}, feature_extractor: {in: dorsal, out: shape_code_d}, concat_1: {in: [shape_code_v, shape_code_d], out: shape_code_c}, seed_generator_to_sparse: {in: dorsal, shape_code: shape_code_c, out: sparse_pc}, point_generator: {seeds: sparse_pc, shape_code: shape_code_c, out: points}],
+      concat_arch_static: [feature_extractor: {in: volar, out: shape_code_v}, feature_extractor: {in: dorsal, out: shape_code_d}, concat_1: {in: [shape_code_v, shape_code_d], out: shape_code_c}, seed_generator: {shape_code: shape_code_c, out: sparse_pc}, point_generator: {seeds: sparse_pc, shape_code: shape_code_c, out: points}],  
+      
+      fuser_concat_arch_dorsal: [feature_extractor: {in: volar, out: shape_code_v}, feature_extractor: {in: dorsal, out: shape_code_d}, shape_code_fuser: {in: [shape_code_v, shape_code_d], out: shape_code_f}, seed_generator_to_sparse: {in: dorsal, shape_code: shape_code_f, out: sparse_pc}, point_generator: {seeds: sparse_pc, shape_code: shape_code_f, out: points}],
+      
+      rot_arch_dorsal: [rot_extractor: {in: dorsal, out: shape_code_v}],
+      rot_rg_arch_dorsal: [feature_extractor: {in: dorsal, out: shape_code_d}, rot_generator: {shape_code: shape_code_d, out: affine_mat}],
+      rot_rg_arch_volar: [feature_extractor: {in: volar, out: shape_code_v}, rot_generator: {shape_code: shape_code_v, out: affine_mat}],
+
+      pose_est_arch_dorsal: [pose_extractor: {in: dorsal, out: pose_code_d}, pose_generator: {pose_code: pose_code_d, out: 6d_pose}],
+      pose_est_arch_volar: [pose_extractor: {in: volar, out: pose_code_v}, pose_generator: {pose_code: pose_code_v, out: 6d_pose}],
+# affil_enricher: {in: [volar, dorsal], out: xyz_affil}concat_2: {in: [volar, dorsal], out: concat
+
+     # Dorsal Default
+      dorsal_pose_est_comp: [
+        pose_extractor: {in: volar, out: pose_code_v}, pose_generator: {pose_code: pose_code_v, out: 6d_pose_v}, 
+        pose_extractor: {in: dorsal, out: pose_code_d}, pose_generator: {pose_code: pose_code_d, out: 6d_pose_d}, 
+        aligner_anchor: {src_pose: 6d_pose_v, tgt_pose: 6d_pose_d, src: volar, tgt: dorsal, out: aligned},
+
+        concat_2: {in: [volar_aligned, dorsal_aligned], out: concat},
+        feature_extractor: {in: concat, out: shape_code_vd}, seed_generator_to_sparse: {in: dorsal_aligned, shape_code: shape_code_vd, out: sparse_pc}, point_generator: {seeds: sparse_pc, shape_code: shape_code_vd, out: points}
+      ],
+      dorsal_pose_est_comp__input: [
+        pose_extractor: {in: volar, out: pose_code_v}, pose_generator: {pose_code: pose_code_v, out: 6d_pose_v}, 
+        pose_extractor: {in: dorsal, out: pose_code_d}, pose_generator: {pose_code: pose_code_d, out: 6d_pose_d}, 
+        aligner_anchor: {src_pose: 6d_pose_v, tgt_pose: 6d_pose_d, src: volar, tgt: dorsal, out: aligned},
+
+        concat_2: {in: [volar_aligned, dorsal_aligned], out: concat},
+        feature_extractor: {in: concat, out: shape_code_vd}, seed_generator_to_sparse: {in: concat, shape_code: shape_code_vd, out: sparse_pc}, point_generator: {seeds: sparse_pc, shape_code: shape_code_vd, out: points}
+      ],
+      # Dorsal Affil
+      dorsal_pose_est_comp_affil: [
+        pose_extractor: {in: volar, out: pose_code_v}, pose_generator: {pose_code: pose_code_v, out: 6d_pose_v}, 
+        pose_extractor: {in: dorsal, out: pose_code_d}, pose_generator: {pose_code: pose_code_d, out: 6d_pose_d}, 
+        aligner_anchor: {src_pose: 6d_pose_v, tgt_pose: 6d_pose_d, src: volar, tgt: dorsal, out: aligned},
+
+        affil_enricher: {in: [volar_aligned, dorsal_aligned], out: xyz_affil},
+        feature_extractor_affil: {in: xyz_affil, out: shape_code_vd}, seed_generator_to_sparse: {in: dorsal_aligned, shape_code: shape_code_vd, out: sparse_pc}, point_generator: {seeds: sparse_pc, shape_code: shape_code_vd, out: points}
+      ],
+      dorsal_pose_est_comp__affil__input: [
+        pose_extractor: {in: volar, out: pose_code_v}, pose_generator: {pose_code: pose_code_v, out: 6d_pose_v}, 
+        pose_extractor: {in: dorsal, out: pose_code_d}, pose_generator: {pose_code: pose_code_d, out: 6d_pose_d}, 
+        aligner_anchor: {src_pose: 6d_pose_v, tgt_pose: 6d_pose_d, src: volar, tgt: dorsal, out: aligned},
+
+        affil_enricher: {in: [volar_aligned, dorsal_aligned], out: xyz_affil},
+        feature_extractor_affil: {in: xyz_affil, out: shape_code_vd}, seed_generator_to_sparse: {in: xyz_affil, shape_code: shape_code_vd, out: sparse_pc}, point_generator: {seeds: sparse_pc, shape_code: shape_code_vd, out: points}
+      ],
+      # Dorsal Concat
+      dorsal_pose_est_comp_concat_shape: [
+        pose_extractor: {in: volar, out: pose_code_v}, pose_generator: {pose_code: pose_code_v, out: 6d_pose_v}, 
+        pose_extractor: {in: dorsal, out: pose_code_d}, pose_generator: {pose_code: pose_code_d, out: 6d_pose_d}, 
+        aligner_anchor: {src_pose: 6d_pose_v, tgt_pose: 6d_pose_d, src: volar, tgt: dorsal, out: aligned},
+
+        feature_extractor: {in: volar_aligned, out: shape_code_v}, feature_extractor: {in: dorsal_aligned, out: shape_code_d}, 
+        concat_1: {in: [shape_code_v, shape_code_d], out: shape_code_c},
+        seed_generator_to_sparse: {in: dorsal_aligned, shape_code: shape_code_c, out: sparse_pc}, point_generator: {seeds: sparse_pc, shape_code: shape_code_c, out: points}
+      ],
+      dorsal_pose_est_comp_concat_shape__input: [
+        pose_extractor: {in: volar, out: pose_code_v}, pose_generator: {pose_code: pose_code_v, out: 6d_pose_v}, 
+        pose_extractor: {in: dorsal, out: pose_code_d}, pose_generator: {pose_code: pose_code_d, out: 6d_pose_d}, 
+        aligner_anchor: {src_pose: 6d_pose_v, tgt_pose: 6d_pose_d, src: volar, tgt: dorsal, out: aligned},
+        concat_2: {in: [volar_aligned, dorsal_aligned], out: concat_input},
+
+        feature_extractor: {in: volar_aligned, out: shape_code_v}, feature_extractor: {in: dorsal_aligned, out: shape_code_d}, 
+        concat_1: {in: [shape_code_v, shape_code_d], out: shape_code_c},
+        seed_generator_to_sparse: {in: concat_input, shape_code: shape_code_c, out: sparse_pc}, point_generator: {seeds: sparse_pc, shape_code: shape_code_c, out: points}
+      ],
+
+      # Volar Default
+      volar_pose_est_comp: [
+        pose_extractor: {in: volar, out: pose_code_v}, pose_generator: {pose_code: pose_code_v, out: 6d_pose_v}, 
+        pose_extractor: {in: dorsal, out: pose_code_d}, pose_generator: {pose_code: pose_code_d, out: 6d_pose_d}, 
+        aligner_anchor: {src_pose: 6d_pose_d, tgt_pose: 6d_pose_v, src: dorsal, tgt: volar, out: aligned},
+
+        concat_2: {in: [volar_aligned, dorsal_aligned], out: concat},
+        feature_extractor: {in: concat, out: shape_code_vd}, seed_generator_to_sparse: {in: volar_aligned, shape_code: shape_code_vd, out: sparse_pc}, point_generator: {seeds: sparse_pc, shape_code: shape_code_vd, out: points}
+      ],
+      volar_pose_est_comp__input: [
+        pose_extractor: {in: volar, out: pose_code_v}, pose_generator: {pose_code: pose_code_v, out: 6d_pose_v}, 
+        pose_extractor: {in: dorsal, out: pose_code_d}, pose_generator: {pose_code: pose_code_d, out: 6d_pose_d}, 
+        aligner_anchor: {src_pose: 6d_pose_d, tgt_pose: 6d_pose_v, src: dorsal, tgt: volar, out: aligned},
+
+        concat_2: {in: [volar_aligned, dorsal_aligned], out: concat},
+        feature_extractor: {in: concat, out: shape_code_vd}, seed_generator_to_sparse: {in: concat, shape_code: shape_code_vd, out: sparse_pc}, point_generator: {seeds: sparse_pc, shape_code: shape_code_vd, out: points}
+      ],
+      # Volar Affil
+      volar_pose_est_comp_affil: [
+        pose_extractor: {in: volar, out: pose_code_v}, pose_generator: {pose_code: pose_code_v, out: 6d_pose_v}, 
+        pose_extractor: {in: dorsal, out: pose_code_d}, pose_generator: {pose_code: pose_code_d, out: 6d_pose_d}, 
+        aligner_anchor: {src_pose: 6d_pose_d, tgt_pose: 6d_pose_v, src: dorsal, tgt: volar, out: aligned},
+
+        affil_enricher: {in: [volar_aligned, dorsal_aligned], out: xyz_affil},
+        feature_extractor_affil: {in: xyz_affil, out: shape_code_vd}, seed_generator_to_sparse: {in: volar_aligned, shape_code: shape_code_vd, out: sparse_pc}, point_generator: {seeds: sparse_pc, shape_code: shape_code_vd, out: points}
+      ],
+      volar_pose_est_comp__affil__input: [
+        pose_extractor: {in: volar, out: pose_code_v}, pose_generator: {pose_code: pose_code_v, out: 6d_pose_v}, 
+        pose_extractor: {in: dorsal, out: pose_code_d}, pose_generator: {pose_code: pose_code_d, out: 6d_pose_d}, 
+        aligner_anchor: {src_pose: 6d_pose_d, tgt_pose: 6d_pose_v, src: dorsal, tgt: volar, out: aligned},
+
+        affil_enricher: {in: [volar_aligned, dorsal_aligned], out: xyz_affil},
+        feature_extractor_affil: {in: xyz_affil, out: shape_code_vd}, seed_generator_to_sparse: {in: xyz_affil, shape_code: shape_code_vd, out: sparse_pc}, point_generator: {seeds: sparse_pc, shape_code: shape_code_vd, out: points}
+      ],
+      # Volar Concat
+      volar_pose_est_comp_concat_shape: [
+        pose_extractor: {in: volar, out: pose_code_v}, pose_generator: {pose_code: pose_code_v, out: 6d_pose_v}, 
+        pose_extractor: {in: dorsal, out: pose_code_d}, pose_generator: {pose_code: pose_code_d, out: 6d_pose_d}, 
+        aligner_anchor: {src_pose: 6d_pose_d, tgt_pose: 6d_pose_v, src: dorsal, tgt: volar, out: aligned},
+
+        feature_extractor: {in: volar_aligned, out: shape_code_v}, feature_extractor: {in: dorsal_aligned, out: shape_code_d}, 
+        concat_1: {in: [shape_code_v, shape_code_d], out: shape_code_c},
+        seed_generator_to_sparse: {in: volar_aligned, shape_code: shape_code_c, out: sparse_pc}, point_generator: {seeds: sparse_pc, shape_code: shape_code_c, out: points}
+      ],
+      volar_pose_est_comp_concat_shape__input: [
+        pose_extractor: {in: volar, out: pose_code_v}, pose_generator: {pose_code: pose_code_v, out: 6d_pose_v}, 
+        pose_extractor: {in: dorsal, out: pose_code_d}, pose_generator: {pose_code: pose_code_d, out: 6d_pose_d}, 
+        aligner_anchor: {src_pose: 6d_pose_d, tgt_pose: 6d_pose_v, src: dorsal, tgt: volar, out: aligned},
+        concat_2: {in: [volar_aligned, dorsal_aligned], out: concat_input},
+
+        feature_extractor: {in: volar_aligned, out: shape_code_v}, feature_extractor: {in: dorsal_aligned, out: shape_code_d}, 
+        concat_1: {in: [shape_code_v, shape_code_d], out: shape_code_c},
+        seed_generator_to_sparse: {in: concat_input, shape_code: shape_code_c, out: sparse_pc}, point_generator: {seeds: sparse_pc, shape_code: shape_code_c, out: points}
+      ],
+      
+
+      # volar_pose_est_comp_concat_shape: [
+      #   pose_extractor: {in: volar, out: pose_code_v}, pose_generator: {pose_code: pose_code_v, out: 6d_pose_v}, 
+      #   pose_extractor: {in: dorsal, out: pose_code_d}, pose_generator: {pose_code: pose_code_d, out: 6d_pose_d},
+        # aligner_anchor: {src_pose: 6d_pose_d, tgt_pose: 6d_pose_v, src: dorsal, tgt: volar, out: dorsal_aligned},
+
+      #   feature_extractor: {in: volar_aligned, out: shape_code_v}, feature_extractor: {in: dorsal, out: shape_code_d}, concat_1: {in: [shape_code_v, shape_code_d], out: shape_code_c},
+      #   seed_generator_to_sparse: {in: dorsal, shape_code: shape_code_c, out: sparse_pc}, point_generator: {seeds: sparse_pc, shape_code: shape_code_c, out: points}
+      # ],
+
+      # dorsal_pose_est_comp_concat_shape_ssm: [
+      #   pose_extractor: {in: volar, out: pose_code_v}, pose_generator: {pose_code: pose_code_v, out: 6d_pose_v}, 
+      #   pose_extractor: {in: dorsal, out: pose_code_d}, pose_generator: {pose_code: pose_code_d, out: 6d_pose_d}, 
+      #   aligner_ssm: {src_pose: 6d_pose_v, tgt_pose: 6d_pose_d, src: volar, tgt: dorsal, out: aligned},
+
+      #   feature_extractor: {in: volar_aligned, out: shape_code_v}, feature_extractor: {in: dorsal_aligned, out: shape_code_d}, concat_1: {in: [shape_code_v, shape_code_d], out: shape_code_c},
+      #   concat_2: {in: [volar_aligned, dorsal_aligned], out: concat_input},
+      #   seed_generator_to_sparse: {in: concat_input, shape_code: shape_code_c, out: sparse_pc}, point_generator: {seeds: sparse_pc, shape_code: shape_code_c, out: points}
+      # ],
+
+      # volar_pose_est_comp_concat_shape_ssm: [
+      #   pose_extractor: {in: volar, out: pose_code_v}, pose_generator: {pose_code: pose_code_v, out: 6d_pose_v}, 
+      #   pose_extractor: {in: dorsal, out: pose_code_d}, pose_generator: {pose_code: pose_code_d, out: 6d_pose_d},
+      #   aligner_ssm: {src_pose: 6d_pose_d, tgt_pose: 6d_pose_v, src: dorsal, tgt: volar, out: aligned},
+
+      #   feature_extractor: {in: volar_aligned, out: shape_code_v}, feature_extractor: {in: dorsal_aligned, out: shape_code_d}, concat_1: {in: [shape_code_v, shape_code_d], out: shape_code_c},
+      #   seed_generator_to_sparse: {in: dorsal, shape_code: shape_code_c, out: sparse_pc}, point_generator: {seeds: sparse_pc, shape_code: shape_code_c, out: points}
+      # ],
+
+      # dorsal_pose_est_comp_concat_input: [
+      #   pose_extractor: {in: volar, out: pose_code_v}, pose_generator: {pose_code: pose_code_v, out: 6d_pose_v}, 
+      #   pose_extractor: {in: dorsal, out: pose_code_d}, pose_generator: {pose_code: pose_code_d, out: 6d_pose_d}, 
+
+      #   aligner_anchor: {src_pose: 6d_pose_v, tgt_pose: 6d_pose_d, src: volar, tgt: dorsal, out: volar_aligned},
+      #   concat_2: {in: [volar_aligned, dorsal], out: concat_input},
+
+      #   feature_extractor: {in: concat_input, out: shape_code_both}, seed_generator_to_sparse: {in: concat_input, shape_code: shape_code_both, out: sparse_pc}, point_generator: {seeds: sparse_pc, shape_code: shape_code_both, out: points}
+      # ],
+
+      
+    }
+}
+
+optimizer : {
+  type: AdamW,
+  kwargs: {
+  lr : 0.0001,
+  weight_decay : 0.0005
+}}
+
+scheduler: {
+  type: LambdaLR,
+  kwargs: {
+  decay_step: 21,
+  lr_decay: 0.9,
+  lowest_decay: 0.02  # min lr = lowest_decay * lr
+}}
+
+bnmscheduler: {
+  type: Lambda,
+  kwargs: {
+  decay_step: 21,
+  bn_decay: 0.5,
+  bn_momentum: 0.9,
+  lowest_decay: 0.01
+}}
+
+# test
+save_vis: False
+
+
+total_bs: 32
+step_per_update : 1
+max_epoch : 100
+
+consider_metric: CDL1

@@ -1,0 +1,82 @@
+# workers: 2
+# nepoch: 400
+model_name: PointAttN
+# load_model: False #  ./log/PointAttN_cd_debug_pcn/model_pcn_new.pth
+# start_epoch: 0
+# num_points: 2048
+# work_dir: log/
+# flag: debug
+# loss: cd #cd
+# seed: null # 1748
+# step_interval_to_print: 100
+# epoch_interval_to_save: 1
+# epoch_interval_to_val: 1
+
+# lr: 0.0001
+# lr_decay: True
+# lr_decay_interval: 40
+# lr_decay_rate: 0.7
+# lr_step_decay_epochs: null
+# lr_step_decay_rates: null
+# lr_clip: 1.e-6
+# optimizer: Adam
+# weight_decay: 0
+# betas: 0.9, 0.999
+
+# device: '0'
+
+dataset : {
+  train : { _base_: dataset_configs/ScaphoidDataset.yaml,
+            others: {subset: 'train'}},
+  val : { _base_: dataset_configs/ScaphoidDataset.yaml,
+            others: {subset: 'val'}},
+  test : { _base_: dataset_configs/ScaphoidDataset.yaml,
+            others: {subset: 'test'}}}
+
+model : {
+    NAME: ScaphoidPointAttN,
+    num_points: 8192, # ToDo: Bestimme num_points
+    arch: default_arch,
+    available_building_blocks : {
+      feature_extractor_v: {input: 'volar', output: 'shape_code_v', mode: 'org'},
+      seed_generator_v: {input: 'volar', shape_code: 'shape_code_v', output: 'seeds_v', mode: 'org'},
+      point_generator_v: {seeds: 'seeds_v', shape_code: 'shape_code_v', output: 'points', mode: 'org'},
+    },
+    available_archs: {
+      default_arch:         {FE: feature_extractor_v, SG: seed_generator_v, PG: point_generator_v},
+    }
+}
+
+optimizer : {
+  type: AdamW,
+  kwargs: {
+  lr : 0.0001,
+  weight_decay : 0.0005
+}}
+
+scheduler: {
+  type: LambdaLR,
+  kwargs: {
+  decay_step: 21,
+  lr_decay: 0.9,
+  lowest_decay: 0.02  # min lr = lowest_decay * lr
+}}
+
+bnmscheduler: {
+  type: Lambda,
+  kwargs: {
+  decay_step: 21,
+  bn_decay: 0.5,
+  bn_momentum: 0.9,
+  lowest_decay: 0.01
+}}
+
+# test
+save_vis: False
+
+
+total_bs: 32
+step_per_update : 1
+max_epoch : 200
+
+consider_metric: CDL1
